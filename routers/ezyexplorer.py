@@ -255,8 +255,8 @@ async def group_list():
         groups_json = result.stdout  # Captured JSON output
         return groups_json
     except subprocess.CalledProcessError as e:
-        return f"Error: {e.returncode}\n{e.stderr}"
-
+        # return f"Error: {e.returncode}\n{e.stderr}"
+ 
 
 #group info
 @router.get("/group_info/{group_name}")
