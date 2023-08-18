@@ -5,7 +5,7 @@ import os
 import smtplib,string,random,re
 from fastapi import Depends,HTTPException,status,APIRouter
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional ,List
 import models
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -13,6 +13,8 @@ from database import SessionLocal,engine
 from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime,timedelta
 from jose import jwt,JWTError
+from minio import Minio
+import json
 import subprocess
 SECRET_KEY ="KlgH6AzYDeZeGwD288to 79I3vTHT8wp7" 
 ALGORITHM = "HS256" 
@@ -78,68 +80,44 @@ async def get_current_user(token:str = Depends(oauth2_bearer)):
         raise get_user_exception()
 
 
-@router.get("/show")
-async def show_settings(user: dict = Depends(get_current_user),
-                           db: Session = Depends(get_db)):
-
-    if user is None:
-        raise get_user_exception()
-    else:
-        users=db.query(models.Users).filter(models.Users.user_id==user.get("id")).first()
-        return {'user_type':users.User_type}
-
 
 class Login(BaseModel):
     username:str
     password:str
+# @router.post("/login")
+# async def login_for_access_token(data:Login,db:Session = Depends(get_db)):
+#     logger.info(f"Received login request for username: {data.username}") 
+#     user = authenticate_user(data.username,data.password,db)
+#     if not user:
+#         logger.warning(f"Failed login attempt for username: {data.username}")
+#         return{"msg": "incorrect  username" }
+#         # raise token_exception()
+#     else:
+#         token_expires = timedelta(minutes=360)
+#         token = create_access_token(user.email,
+#                                 user.user_id,
+#                                 expires_delta=token_expires)
+#         logger.info(f"user login for username: {data.username} login") 
+#         return{"token":token,"User":"User Found","User_type":user.User_type}
+
+
 @router.post("/login")
-async def login_for_access_token(data:Login,db:Session = Depends(get_db)):
+async def login_for_access_token(data: Login, db: Session = Depends(get_db)):
     logger.info(f"Received login request for username: {data.username}") 
-    user = authenticate_user(data.username,data.password,db)
+    user = authenticate_user(data.username, data.password, db)
+
     if not user:
         logger.warning(f"Failed login attempt for username: {data.username}")
-        return{"msg": "incorrect  username" }
-        # raise token_exception()
+        return {"msg": "Incorrect username or password"}
+    elif not user.status:
+        # Check if the user is disabled (status is "disable")
+        logger.warning(f"Login attempt for disabled username: {data.username}")
+        raise HTTPException(status_code=403, detail="User is disabled by admin")
     else:
         token_expires = timedelta(minutes=360)
-        token = create_access_token(user.email,
-                                user.user_id,
-                                expires_delta=token_expires)
-        logger.info(f"user login for username: {data.username} login") 
-        return{"token":token,"User":"User Found","User_type":user.User_type}
-
-
-# #usercreation code
-# class create(BaseModel):
-#     Name:str
-#     Email:str
-
-
-# @router.post("/create")
-# async def create_user(users: create, db: Session = Depends(get_db),
-#                       user: dict = Depends(get_current_user)):
- 
-#     if user is None:
-#         raise get_user_exception()
-#     new=db.query(models.Users).filter(models.Users.user_id==user.get('id')).first()
-#     type = new.User_type   
-#     if type=='admin':
-#     # Log the request details
-#          logger.info(f"admin created a new user: {users.Email}")
-    
-#     # Create the new user with 'regular' User_type
-#          user_model = models.Users()
-#          user_model.Name = users.Name 
-#          user_model.email = users.Email
-#          pas = new_password(users.Email)
-#          user_model.password = pas
-#          user_model.User_type = "regular_user"
-#          db.add(user_model)
-#          db.commit()
-    
-#          return "User created successfully."
-#     else:
-#           raise HTTPException(status_code=403, detail="You are not authorized to create new users.")
+        token = create_access_token(user.email, user.user_id, expires_delta=token_expires)
+        logger.info(f"User login for username: {data.username}") 
+        return {"token": token, "User": "User Found", "User_type": user.User_type}
 
 
 
@@ -263,6 +241,7 @@ import random
 import string
 import smtplib
 from email.mime.text import MIMEText
+# Assuming you have a function to retrieve the username from the database
 
 def new_password(email):
     otp = "".join(random.choices(string.ascii_letters + string.digits, k=8))
@@ -297,22 +276,6 @@ def new_password(email):
 
 
 
-#  @app.get("/group_list")
-# async def group_list():
-#     # Construct the command as a list of strings
-#     command = ["./mc", "admin", "group", "ls", "minio", "--json"]
-
-#     # Run the command using subprocess and capture the output
-#     try:
-#         result = subprocess.run(command, capture_output=True, text=True, check=True)
-#         groups_json = result.stdout  # Captured JSON output
-#         return groups_json
-#     except subprocess.CalledProcessError as e:
-#         return f"Error: {e.returncode}\n{e.stderr}"
-
-
-
-
 def create_minio_user(username, password):
     try:
         cruser_command = f"./mc admin user add minio {username} {password}"
@@ -321,113 +284,135 @@ def create_minio_user(username, password):
         raise RuntimeError(f"Error creating MinIO user: {e}")
 #user creation and db and minio at a time data?
 class create(BaseModel):
-    Name: str
-    Email: str
+    name: str
+    username: str
 
-@router.post("/create")
+@router.post("/user_create")
 async def create_user(users: create, db: Session = Depends(get_db),
                       user: dict = Depends(get_current_user)):
-
-    if user is None:
-        raise get_user_exception()
-    
     new = db.query(models.Users).filter(models.Users.user_id == user.get('id')).first()
     user_type = new.User_type
     
-    if user_type == 'admin':
-        logger.info(f"Admin created a new user: {users.Email}")
-    
+    if user_type.lower() == 'admin':
+        existing_user = db.query(models.Users).filter(models.Users.email == users.username).first()
+        if existing_user:
+            return {"detail":"User with this email already exists."}
+        logger.info(f"Admin created a new user: {users.username}")
         user_model = models.Users()
-        user_model.Name = users.Name 
-        user_model.email = users.Email
-        pas = new_password(users.Email)
+        user_model.Name = users.name 
+        user_model.email = users.username
+        pas = new_password(users.username)
         user_model.password = pas
         user_model.User_type = "regular_user"
+        user_model.status = True 
         db.add(user_model)
         db.commit()
         
         # Create user in MinIO with the same email and password
-        create_minio_user(users.Email, pas)
+        create_minio_user(users.username, pas)
         
-        return "User created successfully."
+        return {"msg":"User created successfully."}
     else:
         raise HTTPException(status_code=403, detail="You are not authorized to create new users.")
 
 
-#checking users list in minio
+# @router.get("/show")
+# async def show_users(user: dict = Depends(get_current_user),
+#                            db: Session = Depends(get_db)):
+
+#     if user is None:
+#         raise get_user_exception()
+#     new=db.query(models.Users).filter(models.Users.user_id==user.get('id')).first()
+#     type=new.User_type
+#     if type.lower()=='admin':
+#         return db.query(models.Users)\
+#             .filter(models.Users.User_type == 'regular_user').all()
+#     else:
+#         return {"detail":"only admin can access the users"}
 
 
 
+# ... (previous code)
 
-# from fastapi import FastAPI, HTTPException
-# from sqlalchemy import create_engine
-# from sqlalchemy.orm import sessionmaker
-# from minio import Minio
+# # Disable user route
+# @router.get("/user_disable/{username}")
+# def disable_user(username: str, db: Session = Depends(get_db)):
+#     try:
+#         # Run MinIO command to disable user
+#         cruser_command = f"./mc admin user disable minio {username}"
+#         subprocess.run(cruser_command, shell=True, check=True)
 
-# app = FastAPI()
-
-# # PostgreSQL setup
-# DATABASE_URL = "postgresql://username:password@localhost/dbname"
-# engine = create_engine(DATABASE_URL)
-# SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# # MinIO setup
-# minio_client = Minio("minio_server", access_key="minio_access_key", secret_key="minio_secret_key", secure=False)
-
-# # Get user data from PostgreSQL
-# def get_user_data(email: str):
-#     db = SessionLocal()
-#     user_data = db.query(User).filter(User.email == email).first()
-#     db.close()
-#     return user_data
-
-# # Create MinIO user and assign policies/groups
-# def create_minio_user_and_assign(user_data):
-#     # Create MinIO user
-#     minio_client.admin.user_add(user_data.email, user_data.password)
-    
-#     # Assign policies or groups based on user type
-#     if user_data.usertype == "admin":
-#         minio_client.admin.group_add_member("admin_group", user_data.email)
-#     elif user_data.usertype == "regular":
-#         minio_client.admin.group_add_member("regular_group", user_data.email)
-#         minio_client.admin.policy_add_member("read_write_policy", user_data.email)
-
-# # FastAPI route to create users and sync with MinIO
-# @app.post("/create_user")
-# async def create_user(user: UserCreate):
-#     # Assuming UserCreate is a Pydantic model for user creation
-#     db = SessionLocal()
-#     new_user = User(email=user.email, password=user.password, usertype=user.usertype)
-#     db.add(new_user)
-#     db.commit()
-#     db.close()
-    
-#     # Sync user data with MinIO
-#     create_minio_user_and_assign(new_user)
-    
-#     return {"message": "User created successfully"}
-
-# # FastAPI route to access MinIO resources
-# @app.get("/get_bucket_data/{bucket_name}")
-# async def get_minio_data(bucket_name: str, user_email: str):
-#     user_data = get_user_data(user_email)
-    
-#     if user_data is None:
-#         raise HTTPException(status_code=403, detail="Access denied.")
-    
-#     # Check user's usertype and authorize accordingly
-#     if user_data.usertype == "admin":
-#         # Provide full access to admin
-#         objects = minio_client.list_objects(bucket_name, recursive=True)
-#         return {"message": "Bucket data retrieved successfully.", "objects": objects}
-#     elif user_data.usertype == "regular":
-#         # Check if user has access to the bucket
-#         if minio_client.admin.policy_contains_member("read_write_policy", user_data.email):
-#             objects = minio_client.list_objects(bucket_name, recursive=True)
-#             return {"message": "Bucket data retrieved successfully.", "objects": objects}
+#         # Update the user status in the database to "disable"
+#         user = db.query(models.Users).filter(models.Users.email == username).first()
+#         if user:
+#             user.status = False  # Update status to "disable"
+#             db.commit()
 #         else:
-#             raise HTTPException(status_code=403, detail="Access denied.")
+#             raise HTTPException(status_code=404, detail="User not found")
+
+#     except subprocess.CalledProcessError as e:
+#         raise RuntimeError(f"Error disabling MinIO user: {e}")
+
+#     return {"message": "User disable is successful"}
+
+# # Enable user route
+# @router.get("/user_enable/{username}")
+# def user_enable(username: str, db: Session = Depends(get_db)):
+#     try:
+#         # Run MinIO command to enable user
+#         cruser = f"./mc admin user enable minio {username}"
+#         subprocess.run(cruser, shell=True, check=True)
+
+#         # Update the user status in the database to "enable"
+#         user = db.query(models.Users).filter(models.Users.email == username).first()
+#         if user:
+#             user.status = True  # Update status to "enable"
+#             db.commit()
+#         else:
+#             raise HTTPException(status_code=404, detail="User not found")
+
+#     except subprocess.CalledProcessError as e:
+#         raise RuntimeError(f"Error enabling MinIO user: {e}")
+
+#     return {"message": "User enable is successful"}
+
+
+# class UserStatus(BaseModel):
+#     username: str
+#     action: bool  # Change the action type to bool
+
+# @router.post("/user_status/")
+# def user_status(user_status: UserStatus, db: Session = Depends(get_db)):
+#     try:
+#         if isinstance(user_status.action, bool):
+#             # Convert the boolean action to the corresponding string value
+#             action_str = "enable" if user_status.action else "disable"
+
+#             # Run MinIO command to enable or disable user based on action_str
+#             cruser_command = f"./mc admin user {action_str} minio {user_status.username}"
+#             subprocess.run(cruser_command, shell=True, check=True)
+
+#             # Update the user status in the database based on the action
+#             user = db.query(models.Users).filter(models.Users.email == user_status.username).first()
+#             if user:
+#                 user.status = user_status.action
+#                 db.commit()
+#             else:
+#                 raise HTTPException(status_code=404, detail="User not found")
+            
+#             return {"message": f"User {action_str} is successful"}
+
+#         else:
+#             raise HTTPException(status_code=400, detail="Invalid action")
+
+#     except subprocess.CalledProcessError as e:
+#         raise HTTPException(status_code=500, detail=f"Error performing action: {e}")
+
+
+
+
+
+
 
 
 
