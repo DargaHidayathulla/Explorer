@@ -7,7 +7,7 @@
         "s3:*"
       ],
       "Resource": [
-        "arn:aws:s3:::ish/*"
+        "arn:aws:s3:::barodabank/*"
       ]
     }
   ]

@@ -14,6 +14,7 @@ from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime,timedelta
 from jose import jwt,JWTError
 from minio import Minio
+from datetime import datetime, timezone, timedelta
 import json
 import subprocess
 SECRET_KEY ="KlgH6AzYDeZeGwD288to 79I3vTHT8wp7" 
@@ -81,6 +82,8 @@ async def get_current_user(token:str = Depends(oauth2_bearer)):
 
 
 
+
+#login page
 class Login(BaseModel):
     username:str
     password:str
@@ -120,6 +123,73 @@ async def login_for_access_token(data: Login, db: Session = Depends(get_db)):
         return {"token": token, "User": "User Found", "User_type": user.User_type}
 
 
+# from fastapi import Header
+
+# default_minio_client = Minio(
+#     "192.168.1.151:9000",
+#     access_key="minioadmin",
+#     secret_key="minioadmin",
+#     secure=False,
+# )
+# # Define the get_bucket_size_recursive function here...
+# def get_bucket_size_recursive(minio_client, bucket_name, prefix=""):
+#     total_size = 0
+#     objects = minio_client.list_objects(bucket_name, prefix=prefix, recursive=True)
+#     for obj in objects:
+#         total_size += obj.size
+#     return total_size
+
+# @router.get("/list4")
+# async def list_buckets(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+#     try:
+#         # Authenticate the user with the provided username and password
+#         pas = db.query(models.Users).filter(models.Users.user_id == user.get("id")).first()
+        
+#         # Determine which MinIO client to use based on user type
+#         # user_type = pas.User_type
+#         # if user_type.lower() == 'admin':
+#         if pas.User_type == 'admin':
+#             minio_client = default_minio_client
+#         else:
+#             # Create a MinIO client for the regular user
+#             minio_client = Minio(
+#                 "192.168.1.151:9000",
+#                 access_key=pas.email,
+#                 secret_key=pas.password,
+#                 secure=False
+#             )
+        
+#         bucket_info = []
+        
+#         # List all buckets for admin users or user-specific buckets for regular users
+#         for bucket in minio_client.list_buckets():
+#             objects = minio_client.list_objects(bucket.name)
+#             num_objects = len([obj for obj in objects])
+#             # Format the bucket creation date in the desired timezone format
+#             creation_date = bucket.creation_date.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime('%Y-%m-%d %H:%M:%S %Z')
+
+#             bucket_size = get_bucket_size_recursive(minio_client, bucket.name)
+#             bucket_size2 = bucket_size / 1024  # Convert size to KB
+
+#             size_str = f"{bucket_size / 1024:.2f} KB" if bucket_size < (1024 * 1024) else f"{bucket_size / (1024 * 1024):.2f} MB"
+
+#             # Get bucket information
+#             bucket_info.append({
+#                 "name": bucket.name,
+#                 "created": creation_date,
+#                 "size": size_str,
+#                 "size_value": round(bucket_size2),
+#                 "objects": num_objects
+#             })
+
+#         return {"buckets": bucket_info}
+#     except Exception as e:
+#         return {"error": str(e)}
+
+
+
+
+
 
 #forgot password code
 class Email1(BaseModel):
@@ -137,10 +207,6 @@ async def forgot_password(email:Email1,db:Session=Depends(get_db)):
         new.password=pas
     db.commit()
     return { "success":"NEW PASSWORD CREATED SUCCESSFULLY "}
-
-
-
-
 
 #change password code
 

@@ -14,15 +14,12 @@ import zipfile
 from fastapi.responses import JSONResponse, StreamingResponse
 from jose import jwt,JWTError
 from fastapi import Depends,HTTPException,status,APIRouter
-from pydantic import BaseModel
-from typing import Optional ,List
-import models
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from database import SessionLocal,engine
-from fastapi.security import OAuth2PasswordBearer
-from datetime import datetime,timedelta
-
+from routers.auth import get_current_user, get_user_exception
+import subprocess
+import json
 # from fastapi.responses import StreamingResponse
 # import httpx
 import asyncio
@@ -33,12 +30,18 @@ router = APIRouter(
     tags=["bucket_list"],
 )
 
-minio_client = Minio(
+default_minio_client = Minio(
     "192.168.1.151:9000",
     access_key="minioadmin",
     secret_key="minioadmin",
     secure=False,
 )
+def get_db():
+    try:
+        db=SessionLocal()
+        yield db
+    finally:
+        db.close()
 
 
 def convert_to_folder_structure(data, current_path="", bucket_name=""):
@@ -59,7 +62,7 @@ def convert_to_folder_structure(data, current_path="", bucket_name=""):
             file_type = key.split('.')[-1]
 
             # Get the size of the file
-            stat = minio_client.stat_object(bucket_name, value)
+            stat = default_minio_client.stat_object(bucket_name, value)
             file2=stat.size
             file_size_mib = file2 / 1024
             
@@ -107,7 +110,7 @@ def get_bucket_data_recursive(bucket_name, tree_path, objects):
 
 @router.get("/get_bucket_data/{bucket_name}")
 async def get_minio_data(bucket_name: str):
-    objects = minio_client.list_objects(bucket_name, recursive=True)
+    objects = default_minio_client.list_objects(bucket_name, recursive=True)
 
     tree_path = {}
 
@@ -120,39 +123,7 @@ async def get_minio_data(bucket_name: str):
     return folder_structure
 
 
-@router.get("/list")
-async def list_buckets():
-    try:
-        bucket_info = []
-        for bucket in minio_client.list_buckets():
-            objects = minio_client.list_objects(bucket.name)
-            num_objects = len([obj for obj in objects])
-         # Format the bucket creation date in the desired timezone format
-            creation_date = bucket.creation_date.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime('%Y-%m-%d %H:%M:%S %Z')
-            bucket_size = get_bucket_size_recursive(minio_client, bucket.name)
-            # Adjust size representation to include "KB" for sizes below 1 MiB
-            # bucket_mib =bucket_size / (1024*1024)
-            # bucket_kib =int(bucket_size /1024)
-            # size_str= f"{bucket_kib}KB"
-            bucket_size2=bucket_size /1024
-            if bucket_size < (1024 * 1024):
-                size_str = f"{bucket_size / 1024:.2f} KB"
-            else:
-                size_str = f"{bucket_size / (1024 * 1024):.2f} MB"
-
-            # Get bucket information
-            bucket_info.append({
-                "name": bucket.name,
-                "created": creation_date,
-                "size": size_str,
-                "size_value":round(bucket_size2),
-                "objects": num_objects
-            })
-        
-        return {"buckets": bucket_info}
-        
-    except Exception as e:
-        return {"error": str(e)}
+# bucket size part
 
 def get_bucket_size_recursive(minio_client, bucket_name, prefix=""):
     total_size = 0
@@ -161,156 +132,71 @@ def get_bucket_size_recursive(minio_client, bucket_name, prefix=""):
         total_size += obj.size
     return total_size
 
+@router.get("/list")
+async def list_buckets(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        # Authenticate the user with the provided username and password
+        pas = db.query(models.Users).filter(models.Users.user_id == user.get("id")).first()
 
-# #authorization part
-# SECRET_KEY ="KlgH6AzYDeZeGwD288to 79I3vTHT8wp7" 
-# ALGORITHM = "HS256" 
-# bcrypt_context =CryptContext(schemes=["bcrypt"],deprecated="auto")
-# models.Base.metadata.create_all(bind=engine)
-# oauth2_bearer = OAuth2PasswordBearer(tokenUrl="token")
-# async def get_current_user(token:str = Depends(oauth2_bearer)):
-#     try:
-#         payload = jwt.decode(token,SECRET_KEY, algorithms=[ALGORITHM])
-#         username:str = payload.get("sub")
-#         user_id:int =payload.get("id")
-#         if username is None or user_id is None:
-#             raise get_user_exception()
-#         return{"username":username,"id":user_id}
-#     except JWTError:
-#         raise get_user_exception()
-# def get_user_exception():
-#     credentials_exception =HTTPException(
-#         status_code=status.HTTP_401_UNAUTHORIZED,
-#         detail="could not validate credentials",
-#         headers={"WWW-Authenticate":"Bearer"},
-#     )
-#     return credentials_exception
-# def token_exception():
-#     token_exception_response =HTTPException(
-#     status_code=status.HTTP_401_UNAUTHORIZED,
-#     detail="incorrect username or password",
-#     headers={"WWW-Authenticate":"Bearer"}
-#     )
-#     return token_exception_response
-# def get_db():
-#     try:
-#         db=SessionLocal()
-#         yield db
-#     finally:
-#         db.close()
-# @router.get("/list")
-# async def list_buckets(db:Session=Depends(get_db),
-#                        user:dict=Depends(get_current_user)):
-#     try:
-#         new=db.query(models.Users).filter(models.Users.user_id == user.get('id')).first()
-#         if new.User_type == "admin":
-#             # Admin user, list all buckets
-#             bucket_names = [bucket.name for bucket in minio_client.list_buckets()]
-#         elif new.User_type == "regular_user":
-#             # Regular user, list user-specific buckets
-#             user_bucket_name = new.bucket_name
-            #   user_files ={}
-            #   return{"user_files":user_files}
+        # Initialize minio_client with default_minio_client
+        minio_client = default_minio_client
+        user_policies = ""
+        # Determine which MinIO client to use based on user type
+        if pas.User_type != 'admin':
+            pas1 = pas.email
+            user = get_user_policies(pas1)
+            user_policies=user.split(",")
+            # Return the user_policies in the response
 
+        bucket_info = []
 
-#         bucket_info = []
-#         for bucket in minio_client.list_buckets():
-#             objects = minio_client.list_objects(bucket.name)
-#             num_objects = len([obj for obj in objects])
-#          # Format the bucket creation date in the desired timezone format
-#             creation_date = bucket.creation_date.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime('%Y-%m-%d %H:%M:%S %Z')
-#             bucket_size = get_bucket_size_recursive(minio_client, bucket.name)
-#             # Adjust size representation to include "KB" for sizes below 1 MiB
-#             # bucket_mib =bucket_size / (1024*1024)
-#             # bucket_kib =int(bucket_size /1024)
-#             # size_str= f"{bucket_kib}KB"
-#             bucket_size2=bucket_size /1024
-#             if bucket_size < (1024 * 1024):
-#                 size_str = f"{bucket_size / 1024:.2f} KB"
-#             else:
-#                 size_str = f"{bucket_size / (1024 * 1024):.2f} MB"
+        # List all buckets for the selected MinIO client
+        for bucket in minio_client.list_buckets():
+            objects = minio_client.list_objects(bucket.name)
+            num_objects = len([obj for obj in objects])
+            # Format the bucket creation date in the desired timezone format
+            creation_date = bucket.creation_date.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime('%Y-%m-%d %H:%M:%S %Z')
 
-#             # Get bucket information
-#             bucket_info.append({
-#                 "name": bucket.name,
-#                 "created": creation_date,
-#                 "size": size_str,
-#                 "size_value":round(bucket_size2),
-#                 "objects": num_objects
-#             })
+            bucket_size = get_bucket_size_recursive(minio_client, bucket.name)
+            bucket_size2 = bucket_size / 1024  # Convert size to KB
 
-#         return {"buckets": bucket_info}
+            size_str = f"{bucket_size / 1024:.2f} KB" if bucket_size < (1024 * 1024) else f"{bucket_size / (1024 * 1024):.2f} MB"
 
-#     except Exception as e:
-#         return {"error": str(e)}
-# def get_bucket_size_recursive(minio_client, bucket_name, prefix=""):
-#     total_size = 0
-#     objects = minio_client.list_objects(bucket_name, prefix=prefix, recursive=True)
-#     for obj in objects:
-#         total_size += obj.size
-#     return total_size
+            # Check if the user is not an admin and the bucket name matches any of the user's policies
+            if pas.User_type != 'admin' and any(policyName in bucket.name for policyName in user_policies):
+                # Add bucket information to the list
+                bucket_info.append({
+                    "name": bucket.name,
+                    "created": creation_date,
+                    "size": size_str,
+                    "size_value": round(bucket_size2),
+                    "objects": num_objects
+                })
+            # If the user is an admin, add all buckets to the list
+            elif pas.User_type == 'admin':
+                bucket_info.append({
+                    "name": bucket.name,
+                    "created": creation_date,
+                    "size": size_str,
+                    "size_value": round(bucket_size2),
+                    "objects": num_objects
+                })
 
+        return {"buckets": bucket_info}
+    except Exception as e:
+        return {"error": str(e)}
 
-
-# from fastapi import Depends, FastAPI, HTTPException
-# from minio import Minio
-# from sqlalchemy.orm import Session
-
-# # ... Import necessary modules and create FastAPI app ...
-
-# # Initialize MinIO client
-# minio_client = Minio(
-#     endpoint='your_minio_endpoint',
-#     access_key='your_access_key',
-#     secret_key='your_secret_key',
-#     secure=True
-# )
-
-# def get_assigned_buckets(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-#     if current_user.user_type == "admin":
-#         assigned_buckets = [bucket.name for bucket in minio_client.list_buckets()]
-#     else:
-#         assigned_buckets = db.query(AssignedBucket.bucket_name).filter(AssignedBucket.user_id == current_user.id).all()
-#         assigned_buckets = [bucket[0] for bucket in assigned_buckets]
-    
-#     return assigned_buckets
-
-# @app.get("/user/buckets")
-# def read_user_buckets(assigned_buckets: list = Depends(get_assigned_buckets)):
-#     return {"assigned_buckets": assigned_buckets}
-
-
-
-
-#adding files download
-
-# class download2(BaseModel):
-#     bucket_name: str
-#     file_path: str
-
-# class download(BaseModel):
-#     bucket_name:str
-#     file_path:str
-
-# @router.post("/file/download")
-# async def download_file(file: download):
-#     try:
-#         # Generate a pre-signed URL for the file
-#         url = generate_presigned_url(file.bucket_name, file.file_path)
-        
-#         # Return the URL to the client
-#         return JSONResponse(content={"download_url": url})
-#     except Exception as e:
-#         return {"error": "Failed to generate download URL"}
-
-# def generate_presigned_url(bucket_name, file_path):
-#     try:
-#         # Generate a pre-signed URL for the file that expires in some time
-#         url = minio_client.presigned_get_object(bucket_name, file_path, expires=timedelta(minutes=30))
-#         return url
-#     except Exception as e:
-#         # Handle errors appropriately
-#         raise e
+def get_user_policies(username):
+    try:
+        # Get the current policies attached to the user
+        cmd_get_policies = f"./mc admin user info minio {username} --json"
+        user_info_output = subprocess.check_output(cmd_get_policies, shell=True).decode()
+        user_info = json.loads(user_info_output)
+        current_policies = user_info.get("policyName", [])
+        return current_policies
+    except subprocess.CalledProcessError as e:
+        print(f"Error getting user policies: {str(e)}")
+        return []
 
 
 
@@ -340,7 +226,7 @@ async def download_item(file2:download):
 def is_path_a_file(bucket_name: str, path: str):
     try:
         # Check if the specified path exists in the bucket as an object (file)
-        minio_client.stat_object(bucket_name, path)
+        default_minio_client.stat_object(bucket_name, path)
         return True
     except S3Error as e:
         # The path does not exist or is not an object (file)
@@ -349,7 +235,7 @@ def is_path_a_file(bucket_name: str, path: str):
 def generate_presigned_url(bucket_name: str, file_path: str):
     try:
         # Generate a pre-signed URL for the file that expires in some time
-        url = minio_client.presigned_get_object(
+        url = default_minio_client.presigned_get_object(
             bucket_name, file_path, expires=timedelta(minutes=30)
         )
         return url
@@ -364,7 +250,7 @@ def generate_presigned_zip_url(bucket_name: str, folder_path: str):
         
         # Upload the zip archive to MinIO
         zip_key = f"{folder_path}.zip"
-        minio_client.put_object(
+        default_minio_client.put_object(
             bucket_name,
             zip_key,
             io.BytesIO(zip_data),
@@ -373,7 +259,7 @@ def generate_presigned_zip_url(bucket_name: str, folder_path: str):
         )
 
         # Generate a pre-signed URL for the uploaded zip archive
-        url = minio_client.presigned_get_object(
+        url = default_minio_client.presigned_get_object(
             bucket_name, zip_key, expires=timedelta(minutes=30)
         )
 
@@ -385,7 +271,7 @@ def generate_presigned_zip_url(bucket_name: str, folder_path: str):
 def create_zip_archive(bucket_name: str, folder_path: str):
     try:
         # List objects in the folder
-        objects = minio_client.list_objects(
+        objects = default_minio_client.list_objects(
             bucket_name, folder_path, recursive=True
         )
 
@@ -394,7 +280,7 @@ def create_zip_archive(bucket_name: str, folder_path: str):
         with zipfile.ZipFile(zip_data, "w", zipfile.ZIP_DEFLATED) as zipf:
             for obj in objects:
                 # Retrieve the object's data from the storage
-                obj_data = minio_client.get_object(
+                obj_data = default_minio_client.get_object(
                     bucket_name, obj.object_name
                 ).read()
                 # Add the object's data to the ZIP archive

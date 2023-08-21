@@ -247,3 +247,10 @@ async def get_user_buckets(username: str):
 #         return{"groups":groups}
 #     except subprocess.CalledProcessError as e:
 #         return f"Error: {e.returncode}\n{e.stderr}"
+#auth part based on minioclient
+minio_client = Minio(
+    "localhost:9000",
+    access_key="minioadmin",
+    secret_key="minioadmin",
+    secure=False,
+)

@@ -230,16 +230,16 @@ async def get_user_attach_policy(poname: str, usrname: str):
 
 
 #add group and users
-@router.get("/group_create/{grpname}/{usrname}")
-async def group_create(grpname: str, usrname: str):
-    usrname_list=usrname.split(",")
-    try:
-        for usrname in usrname_list:
-            cmd = ["./mc", "admin", "group", "add", "minio", grpname, usrname]
-            return_code = subprocess.run(cmd, check=True)
-        return {"message": "Group is created successfully"}
-    except subprocess.CalledProcessError as e:
-        return {"message": f"Error: Group creation failed with subprocess error: {str(e)}"}
+# @router.get("/group_create/{grpname}/{usrname}")
+# async def group_create(grpname: str, usrname: str):
+#     usrname_list=usrname.split(",")
+#     try:
+#         for usrname in usrname_list:
+#             cmd = ["./mc", "admin", "group", "add", "minio", grpname, usrname]
+#             return_code = subprocess.run(cmd, check=True)
+#         return {"message": "Group is created successfully"}
+#     except subprocess.CalledProcessError as e:
+#         return {"message": f"Error: Group creation failed with subprocess error: {str(e)}"}
 
 
 
@@ -256,16 +256,16 @@ async def attachpolicy_group(policy_name:str,group_name:str):
         return{"message":f"Error attaching is policy to the group:{str(e)}"}
 
 #remove users from group
-@router.get("/group_remove_user/{group_name}/{user_names}")
-async def remove_user_group(group_name: str, user_names: str):
-    try:
-        users = user_names.split(",")
-        for user in users:
-            cmd = f"./mc admin group remove minio {group_name} {user.strip()}"
-            remove_user = subprocess.run(cmd, shell=True, check=True)
-        return {"message": "Users removed from group successfully"}
-    except subprocess.CalledProcessError as e:
-        return {"message": f"Error removing user from group: {str(e)}"}
+# @router.get("/group_remove_user/{group_name}/{user_names}")
+# async def remove_user_group(group_name: str, user_names: str):
+#     try:
+#         users = user_names.split(",")
+#         for user in users:
+#             cmd = f"./mc admin group remove minio {group_name} {user.strip()}"
+#             remove_user = subprocess.run(cmd, shell=True, check=True)
+#         return {"message": "Users removed from group successfully"}
+#     except subprocess.CalledProcessError as e:
+#         return {"message": f"Error removing user from group: {str(e)}"}
 
 '''k:Detach policy from group'''
 @router.get("/group_detach_policy/{policy_name}/{group_name}")
@@ -298,7 +298,7 @@ async def remove_group(group_name:str):
         return{"message":f"error for removing from group:{str(e)}"}
 
 # # users list
-# @router.get("/user_list1")
+# @router.get("/user_list12")
 # async def user_list():
 #     try:
 #         cmd=f"./mc admin user ls minio --json"
@@ -435,34 +435,111 @@ async def group_list():
                 group_info = json.loads(group_info_json)
                 policies = group_info.get("groupPolicy", [])
                 users = group_info.get("members", [])
+                #if policyies empty or values t
+                if isinstance(policies, str):
+                    policies = policies.split(",")
+                if isinstance(users, str):
+                    users = users.split(",")
+
                 groups_with_policies_users.append({
                     "groupName": group,
-                    "groupPolicy": policies.split(","),
+                    "groupPolicy": policies,
                     "members": users
                 })
+                groups_with_policies_users.sort(key=lambda x: x["groupName"])
             except subprocess.CalledProcessError as e:
                 return {"error": f"Error: {e.returncode}\n{e.stderr}"} 
+
         return {"groups": groups_with_policies_users}
     except subprocess.CalledProcessError as e:
         return {"error": f"Error: {e.returncode}\n{e.stderr}"}
+
+
+
+
+class group_create(BaseModel):
+    group: str
+
+@router.post("/group_create")
+async def group_create(group_info: group_create):
+    default_username = "srinivas@gmail.com"  # Change this to your desired default username
+    group_name = group_info.group
     
-
-
-
-# @router.get("/group_create/{grpname}")
-# async def group_create(grpname: str):
-#     try:
-#         # Create a "group" user (without associating any policies)
-#         group_user = f"group_{grpname}"
-#         minio_client.make_group(group_user)
+    # Check if the group already exists
+    check_cmd = ["./mc", "admin", "group", "list", "minio"]
+    check_process = subprocess.Popen(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    check_output, check_error = check_process.communicate()
+    
+    if group_name in check_output.decode():
+        # Group already exists, return a message
+        return {"exists": f"Group '{group_name}' already exists."}
+    
+    try:
+        # Create the group with the default username
+        cmd = ["./mc", "admin", "group", "add", "minio", group_name, default_username]
+        return_code = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
-#         return {"message": f"Group '{grpname}' is created successfully"}
-#     except Exception as e:
-#         return {"message": f"Error: Group creation failed with error: {str(e)}"}
+        # Remove the default user from the group
+        remove_cmd = ["./mc", "admin", "group", "rm", "minio", group_name, default_username]
+        remove_return_code = subprocess.run(remove_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # Assuming you are using FastAPI, return a JSON response
+        return {"created": f"Group '{group_name}' is created successfully with default username: {default_username} and default user removed from the group."}
+    
+    except subprocess.CalledProcessError as e:
+        # Return an error response with details
+        raise HTTPException(status_code=500, detail=f"Subprocess error - {str(e)}")
+
+class Groupmodel1(BaseModel):
+    groupName:str
+    buckets:str
 
 
+def get_user_policies(groupName):
+    try:
+        # Get the current policies of the group 
+        cmd_group_policies = f"./mc admin group info minio {groupName} --json"
+        group_info_output = subprocess.check_output(cmd_group_policies, shell=True).decode()
+        group_info = json.loads(group_info_output)
+        
+        group_policies = group_info.get("groupPolicy", [])
+        return group_policies
+    except subprocess.CalledProcessError as e:
+        print(f"Error getting group policies: {str(e)}")
+        return []
 
+def detach_policies(groupName, policies_to_detach):
+    try:
+        if policies_to_detach:
+            grp_policy=policies_to_detach.split(",")
+            for policy_name in grp_policy:
+              cmd_detach = f"./mc admin policy detach minio {policy_name} --group {groupName}"
+              subprocess.run(cmd_detach, shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error detaching policies: {str(e)}")
 
+@router.post("/group/add_bucket")
+async def update_group_policies(bucket:Groupmodel1):
+    try:
+        new_policies = bucket.buckets.split(",")
+
+        # Get the current policies attached to the user
+        group_policies = get_user_policies(bucket.groupName)
+
+        # Detach the existing policies
+        detach_policies(bucket.groupName, group_policies)
+        
+        # Attach the new policies
+        if len(new_policies) > 0 and new_policies[0] != "":
+            for policy_name in new_policies:
+               cmd_attach = f"./mc admin policy attach minio {policy_name} --group {bucket.groupName}"
+               subprocess.run(cmd_attach, shell=True, check=True)
+            return {"group_update": "Policies updated successfully."}
+        else:
+            return{"policies":"all existing buckets are detached"}
+
+    except subprocess.CalledProcessError as e:
+        return {"error": f"Error updating policies: {str(e)}"}
 '''p.server information'''
 @router.get("/server_info")
 def server_information():
