@@ -2,7 +2,7 @@ import sys
 sys.path.append( "..")
 from pydantic import BaseModel
 import models
-from minio import Minio
+# from minio import Minio
 from datetime import timezone, timedelta
 from minio.error import S3Error
 import io
@@ -23,12 +23,7 @@ router = APIRouter(
     tags=["bucket_list"],
 )
 
-# default_minio_client = Minio(
-#     "localhost:9000",
-#     access_key="minioadmin",
-#     secret_key="minioadmin",
-#     secure=False,
-# )
+
 def get_db():
     try:
         db=SessionLocal()

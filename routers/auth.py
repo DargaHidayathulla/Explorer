@@ -301,36 +301,7 @@ async def test_smtp(email1:smtptesting,db: Session = Depends(get_db),
         return {"error":"Smtp user invalid"}
 
 
-# def new_password(email):
-#     otp = "".join(random.choices(string.ascii_letters + string.digits, k=8))
-#     server = smtplib.SMTP('smtp.gmail.com', 587)
-#     server.starttls()
-#     server.login('dargahidayathulla639@gmail.com', 'baysaggpqmqfhsok')
 
-#     # HTML formatted message
-#     msg = f"""\
-#     <html>
-#       <body>
-#         <p><b>Hi,</b></p>
-#         <p>Your Ezy | Explorer new password is :</p>
-#         <p style="color: blue;"><b>{otp}</b></p>
-#         <p><i>Regards,</i></p>
-#         <p style="color: red;">Ezy | Explorer</p>
-#       </body>
-#     </html>
-#     """
-
-#     # Create a MIMEText object with 'html' content type
-#     mime_msg = MIMEText(msg, 'html')
-
-#     mime_msg['From'] = 'dargahidaytahulla639@gmail..com'
-#     mime_msg['To'] = email
-#     mime_msg['Subject'] = 'New Password'
-
-#     server.sendmail('dargahidayathulla639@gmail.com', email, mime_msg.as_string())
-#     server.quit()
-#     logger.info(f"Password created or reset by a user: {email}")
-#     return otp
 
 #smtp credentials table 
 @router.get("/get_smtp")

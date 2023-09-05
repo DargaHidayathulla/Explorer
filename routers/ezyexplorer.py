@@ -46,8 +46,8 @@ def create_bucket(bucket: create_bucket, user: dict = Depends(get_current_user))
         if not minio_client.bucket_exists(bucket_name):
             # Create bucket.
             minio_client.make_bucket(bucket_name)
-            folder_name = "SHIJI"
-            minio_client.put_object(bucket_name, f"{folder_name}/", io.BytesIO(b''), 0) 
+            # folder_name = "SHIJI"
+            # minio_client.put_object(bucket_name, f"{folder_name}/", io.BytesIO(b''), 0) 
         
             # Create policy
             def create_policy(bucket_name):
