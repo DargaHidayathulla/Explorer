@@ -1,7 +1,7 @@
 
+# baysaggpqmqfhsok
 import sys
 sys.path.append( "..")
-import os
 import smtplib,string,random,re
 from fastapi import Depends,HTTPException,status,APIRouter
 from pydantic import BaseModel
@@ -13,10 +13,13 @@ from database import SessionLocal,engine
 from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime,timedelta
 from jose import jwt,JWTError
-from minio import Minio
-from datetime import datetime, timezone, timedelta
-import json
+
+
 import subprocess
+from routers.custom import get_custom_logger
+
+logger = get_custom_logger(engine)
+
 SECRET_KEY ="KlgH6AzYDeZeGwD288to 79I3vTHT8wp7" 
 ALGORITHM = "HS256" 
 bcrypt_context =CryptContext(schemes=["bcrypt"],deprecated="auto")
@@ -38,9 +41,6 @@ def get_db():
 
 
 
-
-# def get_password_hash(password):
-#     return bcrypt_context.hash(password)
 
 def verify_password(user_password, db_password):
     if user_password == db_password:
@@ -65,7 +65,7 @@ def create_access_token(username:str,user_id:int,
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=60)
+        expire = datetime.utcnow() + timedelta(minutes=30)
     encode.update({"exp":expire})
     return jwt.encode(encode,SECRET_KEY,algorithm=ALGORITHM)
 
@@ -76,9 +76,27 @@ async def get_current_user(token:str = Depends(oauth2_bearer)):
         user_id:int =payload.get("id")
         if username is None or user_id is None:
             raise get_user_exception()
+        # expiration_time = payload.get("exp")
         return{"username":username,"id":user_id}
     except JWTError:
         raise get_user_exception()
+
+
+@router.post("/refresh_token")
+async def refresh_token(token:str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        user_id = payload.get("id")
+        
+        # Assuming the old token is valid, generate a new token
+        new_token = create_access_token(username, user_id)
+        
+        return {"new_token": new_token}
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
 
 
 
@@ -87,22 +105,6 @@ async def get_current_user(token:str = Depends(oauth2_bearer)):
 class Login(BaseModel):
     username:str
     password:str
-# @router.post("/login")
-# async def login_for_access_token(data:Login,db:Session = Depends(get_db)):
-#     logger.info(f"Received login request for username: {data.username}") 
-#     user = authenticate_user(data.username,data.password,db)
-#     if not user:
-#         logger.warning(f"Failed login attempt for username: {data.username}")
-#         return{"msg": "incorrect  username" }
-#         # raise token_exception()
-#     else:
-#         token_expires = timedelta(minutes=360)
-#         token = create_access_token(user.email,
-#                                 user.user_id,
-#                                 expires_delta=token_expires)
-#         logger.info(f"user login for username: {data.username} login") 
-#         return{"token":token,"User":"User Found","User_type":user.User_type}
-
 
 @router.post("/login")
 async def login_for_access_token(data: Login, db: Session = Depends(get_db)):
@@ -115,79 +117,12 @@ async def login_for_access_token(data: Login, db: Session = Depends(get_db)):
     elif not user.status:
         # Check if the user is disabled (status is "disable")
         logger.warning(f"Login attempt for disabled username: {data.username}")
-        raise HTTPException(status_code=403, detail="User is disabled by admin")
+        return {"disable":"User is disabled by admin"}
     else:
-        token_expires = timedelta(minutes=360)
-        token = create_access_token(user.email, user.user_id, expires_delta=token_expires)
+        # token_expires = timedelta(minutes=30)
+        token = create_access_token(user.email, user.user_id)
         logger.info(f"User login for username: {data.username}") 
         return {"token": token, "User": "User Found", "User_type": user.User_type}
-
-
-# from fastapi import Header
-
-# default_minio_client = Minio(
-#     "192.168.1.151:9000",
-#     access_key="minioadmin",
-#     secret_key="minioadmin",
-#     secure=False,
-# )
-# # Define the get_bucket_size_recursive function here...
-# def get_bucket_size_recursive(minio_client, bucket_name, prefix=""):
-#     total_size = 0
-#     objects = minio_client.list_objects(bucket_name, prefix=prefix, recursive=True)
-#     for obj in objects:
-#         total_size += obj.size
-#     return total_size
-
-# @router.get("/list4")
-# async def list_buckets(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-#     try:
-#         # Authenticate the user with the provided username and password
-#         pas = db.query(models.Users).filter(models.Users.user_id == user.get("id")).first()
-        
-#         # Determine which MinIO client to use based on user type
-#         # user_type = pas.User_type
-#         # if user_type.lower() == 'admin':
-#         if pas.User_type == 'admin':
-#             minio_client = default_minio_client
-#         else:
-#             # Create a MinIO client for the regular user
-#             minio_client = Minio(
-#                 "192.168.1.151:9000",
-#                 access_key=pas.email,
-#                 secret_key=pas.password,
-#                 secure=False
-#             )
-        
-#         bucket_info = []
-        
-#         # List all buckets for admin users or user-specific buckets for regular users
-#         for bucket in minio_client.list_buckets():
-#             objects = minio_client.list_objects(bucket.name)
-#             num_objects = len([obj for obj in objects])
-#             # Format the bucket creation date in the desired timezone format
-#             creation_date = bucket.creation_date.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime('%Y-%m-%d %H:%M:%S %Z')
-
-#             bucket_size = get_bucket_size_recursive(minio_client, bucket.name)
-#             bucket_size2 = bucket_size / 1024  # Convert size to KB
-
-#             size_str = f"{bucket_size / 1024:.2f} KB" if bucket_size < (1024 * 1024) else f"{bucket_size / (1024 * 1024):.2f} MB"
-
-#             # Get bucket information
-#             bucket_info.append({
-#                 "name": bucket.name,
-#                 "created": creation_date,
-#                 "size": size_str,
-#                 "size_value": round(bucket_size2),
-#                 "objects": num_objects
-#             })
-
-#         return {"buckets": bucket_info}
-#     except Exception as e:
-#         return {"error": str(e)}
-
-
-
 
 
 
@@ -203,9 +138,10 @@ async def forgot_password(email:Email1,db:Session=Depends(get_db)):
         return {"invalid":" Invalid Email "}
         
     elif new is not None:
-        pas=new_password(mail)
+        pas=new_password(mail,db)
         new.password=pas
     db.commit()
+    logger.info(f" this {email.username} forgot the password ")
     return { "success":"NEW PASSWORD CREATED SUCCESSFULLY "}
 
 #change password code
@@ -230,9 +166,9 @@ def is_strong_password(password: str) -> bool:
 
 @router.put('/change_password')
 async def Change_Password(password: ChangePassword, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    logger.info(f"Received change password request for user ID: {user.get('id')}")
+    # logger.info(f"Received change password request for user ID: {user.get('id')}")
     pas = db.query(models.Users).filter(models.Users.user_id == user.get("id")).first()
-    
+    logger.info(f"Received change password request for user name is : {pas.Name}")
     if pas.password == password.CurrentPassword:
         if password.NewPassword == password.ConfirmPassword:
             if is_strong_password(password.NewPassword):
@@ -240,7 +176,7 @@ async def Change_Password(password: ChangePassword, user: dict = Depends(get_cur
                 db.commit()
                 return {"success": "NEW PASSWORD CREATED SUCCESSFULLY"}
             else:
-                return {"msg": "New password must be at least 8 characters long and contain one special character."}
+                return {"msg1": "New password must be at least 8 characters long and contain one special character."}
         else:
             return {"msg2": "New password and confirm password are not the same."}
     else:
@@ -263,84 +199,174 @@ def token_exception():
     return token_exception_response
 
 
-# def get_current_timestamp():
-#     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-
-import logging
-class PostgresHandler(logging.Handler):
-    def __init__(self, connection, table_name="logs"):
-        super().__init__()
-        self.connection = connection
-        self.table_name = table_name
-
-    def emit(self, record):
-        try:
-            log = models.Log(level=record.levelname, message=record.msg)
-            with SessionLocal() as session:
-                session.add(log)
-                session.commit()
-        except Exception as e:
-            print(f"Error while logging to PostgreSQL: {e}")
-
-# Create a custom logger and add the custom PostgresHandler
-def get_custom_logger():
-    logger = logging.getLogger("custom_logger")
-    logger.setLevel(logging.INFO)
-
-    handler = PostgresHandler(engine)
-    logger.addHandler(handler)
-
-    return logger
-
-# Now, you can use the custom logger to log messages to the database
-logger = get_custom_logger()
-
-
-# import random
-# import string
-# import smtplib
-
 #password mail code
-import random
-import string
-import smtplib
+
 from email.mime.text import MIMEText
-# Assuming you have a function to retrieve the username from the database
 
-def new_password(email):
-    otp = "".join(random.choices(string.ascii_letters + string.digits, k=8))
-    server = smtplib.SMTP('smtp.gmail.com', 587)
-    server.starttls()
-    server.login('dargahidayathulla639@gmail.com', 'baysaggpqmqfhsok')
+# Assuming you have already imported necessary modules and defined the logger
 
-    # HTML formatted message
-    msg = f"""\
-    <html>
-      <body>
-        <p><b>Hi,</b></p>
-        <p>Your Ezy | Explorer new password is :</p>
-        <p style="color: blue;"><b>{otp}</b></p>
-        <p><i>Regards,</i></p>
-        <p style="color: red;">Ezy | Explorer</p>
-      </body>
-    </html>
-    """
+def new_password(email, db):
+    try:
+        smtp_credentials = db.query(models.Credentials).first()
+        if not smtp_credentials:
+            return {"msg1": "SMTP credentials not found in the database"}
 
-    # Create a MIMEText object with 'html' content type
-    mime_msg = MIMEText(msg, 'html')
+        smtp_host = smtp_credentials.smtphost
+        smtp_port = smtp_credentials.smtpport
+        smtp_user = smtp_credentials.smtp_user
+        smtp_password = smtp_credentials.smtp_password
+        otp = "".join(random.choices(string.ascii_letters + string.digits, k=8))
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
 
-    mime_msg['From'] = 'dargahidaytahulla639@gmail..com'
-    mime_msg['To'] = email
-    mime_msg['Subject'] = 'New Password'
+        msg = f"""\
+        <html>
+          <body>
+            <p><b>Hi,</b></p>
+            <p>Your Ezy | Explorer new password is :</p>
+            <p style="color: blue;"><b>{otp}</b></p>
+            <p><i>Regards,</i></p>
+            <p style="color: red;">Ezy | Explorer</p>
+          </body>
+        </html>
+        """
 
-    server.sendmail('dargahidayathulla639@gmail.com', email, mime_msg.as_string())
-    server.quit()
-    logger.info(f"Password created or reset by a user: {email}")
-    return otp
+        mime_msg = MIMEText(msg, 'html')
+
+        mime_msg['From'] = smtp_user
+        mime_msg['To'] = email
+        mime_msg['Subject'] = 'New Password'
+
+        server.sendmail(smtp_user, email, mime_msg.as_string())
+        server.quit()
+        logger.info(f"Password created or reset by a user: {email}")
+        return otp
+
+    except Exception as e:
+        logger.error(f"Error sending email: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error sending email")
+
+#testing part
+class smtptesting(BaseModel):
+    email:str
 
 
+@router.post("/test_smtp")
+async def test_smtp(email1:smtptesting,db: Session = Depends(get_db),
+                    user: dict = Depends(get_current_user)):
+    try:
+        email1=email1.email
+        # Retrieve SMTP credentials from the database
+        smtp_credentials = db.query(models.Credentials).first()
+        if not smtp_credentials:
+            raise HTTPException(status_code=500, detail="SMTP credentials not found in the database")
+
+        smtp_host = smtp_credentials.smtphost
+        smtp_port = smtp_credentials.smtpport
+        smtp_user = smtp_credentials.smtp_user
+        smtp_password = smtp_credentials.smtp_password
+        # Connect to the SMTP server and send the email
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+
+        msg = f"""\
+        <html>
+          <body>
+            <p><b>Hi,</b></p>
+            <p style="color:blue;">Your Ezy | Explorer SMTP Email Test Compelted Successfully</p>
+            <p><i>Regards,</i></p>
+            <p style="color: red;">Ezy | Explorer</p>
+          </body>
+        </html>
+        """
+
+        mime_msg = MIMEText(msg, 'html')
+
+        mime_msg['From'] = smtp_user
+        mime_msg['To'] = email1
+        mime_msg['Subject'] = 'SMTP Checking'
+
+        server.sendmail(smtp_user, email1, mime_msg.as_string())
+        server.quit()
+
+        # logger.info(f"Password reset email sent to: {email1}")
+
+        # Return a success message
+        return {"message": "SMTP user credentials are valid"}
+
+    except Exception as e:
+        logger.error(f"smtp user invalid")
+        return {"error":"Smtp user invalid"}
+
+
+# def new_password(email):
+#     otp = "".join(random.choices(string.ascii_letters + string.digits, k=8))
+#     server = smtplib.SMTP('smtp.gmail.com', 587)
+#     server.starttls()
+#     server.login('dargahidayathulla639@gmail.com', 'baysaggpqmqfhsok')
+
+#     # HTML formatted message
+#     msg = f"""\
+#     <html>
+#       <body>
+#         <p><b>Hi,</b></p>
+#         <p>Your Ezy | Explorer new password is :</p>
+#         <p style="color: blue;"><b>{otp}</b></p>
+#         <p><i>Regards,</i></p>
+#         <p style="color: red;">Ezy | Explorer</p>
+#       </body>
+#     </html>
+#     """
+
+#     # Create a MIMEText object with 'html' content type
+#     mime_msg = MIMEText(msg, 'html')
+
+#     mime_msg['From'] = 'dargahidaytahulla639@gmail..com'
+#     mime_msg['To'] = email
+#     mime_msg['Subject'] = 'New Password'
+
+#     server.sendmail('dargahidayathulla639@gmail.com', email, mime_msg.as_string())
+#     server.quit()
+#     logger.info(f"Password created or reset by a user: {email}")
+#     return otp
+
+#smtp credentials table 
+@router.get("/get_smtp")
+async def show_smtp(db:Session=Depends(get_db)):
+    new=db.query(models.Credentials).all()
+    return new
+#SMTP Creation part
+class credentails(BaseModel):
+    smtpHost :str
+    smtpPort:str
+    user:str
+    password:str
+@router.put("/smtp_create")
+async def smtp_create(new:credentails,db: Session = Depends(get_db),
+                      user: dict = Depends(get_current_user)):
+    smtp_model=db.query(models.Credentials).first()
+    if smtp_model:
+      smtp_model.smtphost = new.smtpHost
+      smtp_model.smtpport = new.smtpPort
+      smtp_model.smtp_user = new.user
+      smtp_model.smtp_password =new.password
+      db.add(smtp_model)
+      db.commit()
+      return {"msg": "SMTP setup updated successfully."}
+    else:
+        smtp_model1=models.Credentials()
+        smtp_model1.smtphost =new.smtpHost
+        smtp_model1.smtpport = new.smtpPort
+        smtp_model1.smtp_user = new.user
+        smtp_model1.smtp_password = new.password
+        db.add(smtp_model1)
+        db.commit()
+        return{"msg1":"SMTP created sucessfully"}
+
+
+#minio creation part
 
 def create_minio_user(username, password):
     try:
@@ -367,7 +393,7 @@ async def create_user(users: create, db: Session = Depends(get_db),
         user_model = models.Users()
         user_model.Name = users.name 
         user_model.email = users.username
-        pas = new_password(users.username)
+        pas = new_password(users.username,db)
         user_model.password = pas
         user_model.User_type = "regular_user"
         user_model.status = True 
@@ -382,104 +408,13 @@ async def create_user(users: create, db: Session = Depends(get_db),
         raise HTTPException(status_code=403, detail="You are not authorized to create new users.")
 
 
-# @router.get("/show")
-# async def show_users(user: dict = Depends(get_current_user),
-#                            db: Session = Depends(get_db)):
+@router.get("/show")
+async def show_users(user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
 
-#     if user is None:
-#         raise get_user_exception()
-#     new=db.query(models.Users).filter(models.Users.user_id==user.get('id')).first()
-#     type=new.User_type
-#     if type.lower()=='admin':
-#         return db.query(models.Users)\
-#             .filter(models.Users.User_type == 'regular_user').all()
-#     else:
-#         return {"detail":"only admin can access the users"}
-
-
-
-# ... (previous code)
-
-# # Disable user route
-# @router.get("/user_disable/{username}")
-# def disable_user(username: str, db: Session = Depends(get_db)):
-#     try:
-#         # Run MinIO command to disable user
-#         cruser_command = f"./mc admin user disable minio {username}"
-#         subprocess.run(cruser_command, shell=True, check=True)
-
-#         # Update the user status in the database to "disable"
-#         user = db.query(models.Users).filter(models.Users.email == username).first()
-#         if user:
-#             user.status = False  # Update status to "disable"
-#             db.commit()
-#         else:
-#             raise HTTPException(status_code=404, detail="User not found")
-
-#     except subprocess.CalledProcessError as e:
-#         raise RuntimeError(f"Error disabling MinIO user: {e}")
-
-#     return {"message": "User disable is successful"}
-
-# # Enable user route
-# @router.get("/user_enable/{username}")
-# def user_enable(username: str, db: Session = Depends(get_db)):
-#     try:
-#         # Run MinIO command to enable user
-#         cruser = f"./mc admin user enable minio {username}"
-#         subprocess.run(cruser, shell=True, check=True)
-
-#         # Update the user status in the database to "enable"
-#         user = db.query(models.Users).filter(models.Users.email == username).first()
-#         if user:
-#             user.status = True  # Update status to "enable"
-#             db.commit()
-#         else:
-#             raise HTTPException(status_code=404, detail="User not found")
-
-#     except subprocess.CalledProcessError as e:
-#         raise RuntimeError(f"Error enabling MinIO user: {e}")
-
-#     return {"message": "User enable is successful"}
-
-
-# class UserStatus(BaseModel):
-#     username: str
-#     action: bool  # Change the action type to bool
-
-# @router.post("/user_status/")
-# def user_status(user_status: UserStatus, db: Session = Depends(get_db)):
-#     try:
-#         if isinstance(user_status.action, bool):
-#             # Convert the boolean action to the corresponding string value
-#             action_str = "enable" if user_status.action else "disable"
-
-#             # Run MinIO command to enable or disable user based on action_str
-#             cruser_command = f"./mc admin user {action_str} minio {user_status.username}"
-#             subprocess.run(cruser_command, shell=True, check=True)
-
-#             # Update the user status in the database based on the action
-#             user = db.query(models.Users).filter(models.Users.email == user_status.username).first()
-#             if user:
-#                 user.status = user_status.action
-#                 db.commit()
-#             else:
-#                 raise HTTPException(status_code=404, detail="User not found")
-            
-#             return {"message": f"User {action_str} is successful"}
-
-#         else:
-#             raise HTTPException(status_code=400, detail="Invalid action")
-
-#     except subprocess.CalledProcessError as e:
-#         raise HTTPException(status_code=500, detail=f"Error performing action: {e}")
-
-
-
-
-
-
-
-
+    if user is None:
+        raise get_user_exception()
+    new=db.query(models.Users).filter(models.Users.user_id==user.get('id')).first()
+    return {"email":new.email}
 
 
